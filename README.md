@@ -33,14 +33,10 @@ make all ECRID=12345
 - make dist-prod
   - upload docker image, will lunch sample-app-prod service
 
-## 4. verification deployed applications
+## 4. deploy resources
 
-Development Application
 ```
-http://ec2-52-53-213-222.us-west-1.compute.amazonaws.com:8080/
+npm install -g serverless
+npm install
+serverless deploy
 ```
-Production Application
-```
-http://ec2-54-193-26-99.us-west-1.compute.amazonaws.com:8080/
-```
-  
