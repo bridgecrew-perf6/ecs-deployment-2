@@ -10,7 +10,7 @@ provider:
   environment:
     USER_ID: 576708929859
     APP_NAME: ${self:service}-${self:provider.stage}
-    MAIN_NAME: ${self:service}-main
+    DEPEND_NAME: ${self:service}-depend
 
 functions:
   api:
@@ -30,16 +30,12 @@ resources: # CloudFormation template syntax
     SubnetB:
       Type: AWS::EC2::Subnet::Id
       Default: subnet-bbd4d0e0
-    ContainerPort:
+    ServicePort:
       Type: Number
       Default: 8080
-    HealthCheckPath:
-      Type: String
-      Default: /
-    LoadBalancerPort:
+    DependPort:
       Type: Number
-      Default: 80
-      #Default: 443
+      Default: 3000
     HostedZoneName:
       Type: String
       Default: mobworx.com
@@ -63,42 +59,11 @@ resources: # CloudFormation template syntax
       Properties:
         ClusterName: ${self:service}
 
-    EcsTaskMain:
-      Type: 'AWS::ECS::TaskDefinition'
-      DependsOn: LogGroupMain
-      Properties:
-        Family: ${self:provider.environment.MAIN_NAME}
-        RequiresCompatibilities:
-          - FARGATE
-        ExecutionRoleArn: 'arn:aws:iam::${self:provider.environment.USER_ID}:role/ecsTaskExecutionRole'
-        NetworkMode: awsvpc
-        Memory: '2048'
-        Cpu: '1024'
-        RuntimePlatform:
-          operatingSystemFamily: LINUX
-        ContainerDefinitions:
-          - Name: ${self:provider.environment.MAIN_NAME}
-            image: '${self:provider.environment.USER_ID}.dkr.ecr.${self:provider.region}.amazonaws.com/${self:provider.environment.APP_NAME}'
-            PortMappings:
-              - ContainerPort: 8080
-                Protocol: tcp
-            LogConfiguration:
-              LogDriver: awslogs
-              Options:
-                awslogs-group: !Ref LogGroupMain
-                awslogs-region: ${self:provider.region}
-                awslogs-stream-prefix: ecs
-
-    LogGroupMain:
-      Type: AWS::Logs::LogGroup
-      Properties:
-        LogGroupName: /ecs/${self:provider.environment.MAIN_NAME}
-
     EcsTask:
       Type: 'AWS::ECS::TaskDefinition'
       DependsOn: 
-        - LogGroupMain
-        - EcsTaskMain
+        - LogGroup
+        - LogGroupDepend
       Properties:
         Family: ${self:provider.environment.APP_NAME}
         RequiresCompatibilities:
@@ -111,10 +76,14 @@ resources: # CloudFormation template syntax
           operatingSystemFamily: LINUX
         ContainerDefinitions:
           - Name: ${self:provider.environment.APP_NAME}
-            image: '${self:provider.environment.USER_ID}.dkr.ecr.${self:provider.region}.amazonaws.com/${self:provider.environment.APP_NAME}'
+            image: '${self:provider.environment.USER_ID}.dkr.ecr.${self:provider.region}.amazonaws.com/${self:service}-dev'
             PortMappings:
-              - ContainerPort: 8080
+              - ContainerPort: !Ref ServicePort
+                HostPort: !Ref ServicePort
                 Protocol: tcp
+            DependsOn:
+            - containerName: sample-deployment-base
+              condition: START
             LogConfiguration:
               LogDriver: awslogs
               Options:
@@ -122,11 +91,21 @@ resources: # CloudFormation template syntax
                 awslogs-region: ${self:provider.region}
                 awslogs-stream-prefix: ecs
 
+          - Name: sample-deployment-base
+            image: '${self:provider.environment.USER_ID}.dkr.ecr.${self:provider.region}.amazonaws.com/${self:service}-prod'
+            PortMappings:
+              - ContainerPort: !Ref DependPort
+                HostPort: !Ref DependPort
+                Protocol: tcp
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref LogGroupDepend
+                awslogs-region: ${self:provider.region}
+                awslogs-stream-prefix: ecs
+                                
     Service:
       Type: AWS::ECS::Service
-      # This dependency is needed so that the load balancer is setup correctly in time
-      DependsOn:
-        - ListenerHTTPS
       Properties: 
         ServiceName: ${self:provider.environment.APP_NAME}
         Cluster: ${self:service}
@@ -134,8 +113,7 @@ resources: # CloudFormation template syntax
         DeploymentConfiguration:
           MinimumHealthyPercent: 100
           MaximumPercent: 200
-        DesiredCount: 2
-        HealthCheckGracePeriodSeconds: 30
+        DesiredCount: 1
         LaunchType: FARGATE
         NetworkConfiguration: 
           AwsvpcConfiguration:
@@ -145,32 +123,16 @@ resources: # CloudFormation template syntax
               - !Ref SubnetB
             SecurityGroups:
               - !Ref ContainerSecurityGroup
-        LoadBalancers:
-          - ContainerName: ${self:provider.environment.APP_NAME}
-            ContainerPort: !Ref ContainerPort
-            TargetGroupArn: !Ref TargetGroup
 
     LogGroup:
       Type: AWS::Logs::LogGroup
       Properties:
         LogGroupName: /ecs/${self:provider.environment.APP_NAME}
-        
-    TargetGroup:
-      Type: AWS::ElasticLoadBalancingV2::TargetGroup
+
+    LogGroupDepend:
+      Type: AWS::Logs::LogGroup
       Properties:
-        HealthCheckIntervalSeconds: 10
-        HealthCheckPath: !Ref HealthCheckPath
-        HealthCheckTimeoutSeconds: 5
-        UnhealthyThresholdCount: 2
-        HealthyThresholdCount: 2
-        Name: ${self:provider.environment.APP_NAME}
-        Port: !Ref ContainerPort
-        Protocol: HTTP
-        TargetGroupAttributes:
-          - Key: deregistration_delay.timeout_seconds
-            Value: 60 # default is 300
-        TargetType: ip
-        VpcId: !Ref VPC
+        LogGroupName: /ecs/${self:provider.environment.DEPEND_NAME}
 
     ContainerSecurityGroup:
       Type: AWS::EC2::SecurityGroup
@@ -179,61 +141,10 @@ resources: # CloudFormation template syntax
         VpcId: !Ref VPC
         SecurityGroupIngress:
           - IpProtocol: tcp
-            FromPort: !Ref ContainerPort
-            ToPort: !Ref ContainerPort
-            SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
-
-    LoadBalancerSecurityGroup:
-      Type: AWS::EC2::SecurityGroup
-      Properties:
-        GroupDescription: ${self:provider.environment.APP_NAME}-LoadBalancerSecurityGroup
-        VpcId: !Ref VPC
-        SecurityGroupIngress:
-          - IpProtocol: tcp
-            FromPort: !Ref LoadBalancerPort
-            ToPort: !Ref LoadBalancerPort
+            FromPort: !Ref DependPort
+            ToPort: !Ref DependPort
             CidrIp: 0.0.0.0/0
-
-    ListenerHTTPS:
-      Type: AWS::ElasticLoadBalancingV2::Listener
-      Properties:
-        DefaultActions:
-          - TargetGroupArn: !Ref TargetGroup
-            Type: forward
-        LoadBalancerArn: !Ref LoadBalancer
-        Port: !Ref LoadBalancerPort
-        Protocol: HTTP
-        #Protocol: HTTPS
-        #Certificates:
-        #  - CertificateArn: !Ref Certificate
-
-    LoadBalancer:
-      Type: AWS::ElasticLoadBalancingV2::LoadBalancer
-      Properties:
-        LoadBalancerAttributes:
-          # this is the default, but is specified here in case it needs to be changed
-          - Key: idle_timeout.timeout_seconds
-            Value: 60
-        Name: ${self:provider.environment.APP_NAME}
-        # "internal" is also an option
-        Scheme: internet-facing
-        SecurityGroups:
-          - !Ref LoadBalancerSecurityGroup
-        Subnets:
-          - !Ref SubnetA
-          - !Ref SubnetB
-
-    DNSRecord:
-      Type: AWS::Route53::RecordSet
-      Properties:
-        HostedZoneName: !Join ['', [!Ref HostedZoneName, .]]
-        Name: !Join ['', [!Ref Subdomain, ., !Ref HostedZoneName, .]]
-        Type: A
-        AliasTarget:
-          DNSName: !GetAtt LoadBalancer.DNSName
-          HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
-
-  Outputs:
-    Endpoint:
-      Description: Endpoint
-      Value: !Join ['', ['http://', !Ref DNSRecord]]
+          - IpProtocol: tcp
+            FromPort: !Ref ServicePort
+            ToPort: !Ref ServicePort
+            CidrIp: 0.0.0.0/0
