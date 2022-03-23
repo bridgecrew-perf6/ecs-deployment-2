@@ -10,7 +10,6 @@ provider:
   environment:
     USER_ID: 576708929859
     APP_NAME: ${self:service}-${self:provider.stage}
-    MAIN_NAME: ${self:service}-main
 
 functions:
   api:
@@ -63,42 +62,9 @@ resources: # CloudFormation template syntax
       Properties:
         ClusterName: ${self:service}
 
-    EcsTaskMain:
-      Type: 'AWS::ECS::TaskDefinition'
-      DependsOn: LogGroupMain
-      Properties:
-        Family: ${self:provider.environment.MAIN_NAME}
-        RequiresCompatibilities:
-          - FARGATE
-        ExecutionRoleArn: 'arn:aws:iam::${self:provider.environment.USER_ID}:role/ecsTaskExecutionRole'
-        NetworkMode: awsvpc
-        Memory: '2048'
-        Cpu: '1024'
-        RuntimePlatform:
-          operatingSystemFamily: LINUX
-        ContainerDefinitions:
-          - Name: ${self:provider.environment.MAIN_NAME}
-            image: '${self:provider.environment.USER_ID}.dkr.ecr.${self:provider.region}.amazonaws.com/${self:provider.environment.APP_NAME}'
-            PortMappings:
-              - ContainerPort: 8080
-                Protocol: tcp
-            LogConfiguration:
-              LogDriver: awslogs
-              Options:
-                awslogs-group: !Ref LogGroupMain
-                awslogs-region: ${self:provider.region}
-                awslogs-stream-prefix: ecs
-
-    LogGroupMain:
-      Type: AWS::Logs::LogGroup
-      Properties:
-        LogGroupName: /ecs/${self:provider.environment.MAIN_NAME}
-
     EcsTask:
       Type: 'AWS::ECS::TaskDefinition'
-      DependsOn: 
-        - LogGroupMain
-        - EcsTaskMain
+      DependsOn: LogGroup
       Properties:
         Family: ${self:provider.environment.APP_NAME}
         RequiresCompatibilities:

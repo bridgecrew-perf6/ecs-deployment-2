@@ -1,0 +1,125 @@
+org: mobworx
+service: sample-deployment
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  region: us-west-1
+  runtime: nodejs14.x
+  stage: dev
+  environment:
+    USER_ID: 576708929859
+    APP_NAME: ${self:service}-${self:provider.stage}
+
+functions:
+  api:
+    handler: handler.handler
+    events:
+      - httpApi: '*'
+
+resources: # CloudFormation template syntax
+
+  Parameters:
+    VPC:
+      Type: AWS::EC2::VPC::Id
+      Default: vpc-26d3ea41
+    SubnetA:
+      Type: AWS::EC2::Subnet::Id
+      Default:  subnet-070ee661
+    SubnetB:
+      Type: AWS::EC2::Subnet::Id
+      Default: subnet-bbd4d0e0
+    ContainerPort:
+      Type: Number
+      Default: 8080
+    HealthCheckPath:
+      Type: String
+      Default: /
+    LoadBalancerPort:
+      Type: Number
+      Default: 80
+      #Default: 443
+    HostedZoneName:
+      Type: String
+      Default: mobworx.com
+    Subdomain:
+      Type: String
+      Default: deployment
+    Certificate:
+      Type: String
+      Default: 'arn:aws:acm:${self:provider.region}:${self:provider.environment.USER_ID}:certificate/42a3d351-4123-45e9-8f5d-089641809e29'
+
+  Resources:
+
+#    PublicRepository:
+#      Type: 'AWS::ECR::Repository'
+#      DeletionPolicy: 'Retain'
+#      Properties:
+#        RepositoryName: ${self:provider.environment.APP_NAME}
+
+    Cluster:
+      Type: AWS::ECS::Cluster
+      Properties:
+        ClusterName: ${self:service}
+
+    EcsTask:
+      Type: 'AWS::ECS::TaskDefinition'
+      DependsOn: LogGroup
+      Properties:
+        Family: ${self:provider.environment.APP_NAME}
+        RequiresCompatibilities:
+          - FARGATE
+        ExecutionRoleArn: 'arn:aws:iam::${self:provider.environment.USER_ID}:role/ecsTaskExecutionRole'
+        NetworkMode: awsvpc
+        Memory: '2048'
+        Cpu: '1024'
+        RuntimePlatform:
+          operatingSystemFamily: LINUX
+        ContainerDefinitions:
+          - Name: ${self:provider.environment.APP_NAME}
+            image: '${self:provider.environment.USER_ID}.dkr.ecr.${self:provider.region}.amazonaws.com/${self:provider.environment.APP_NAME}'
+            PortMappings:
+              - ContainerPort: !Ref ContainerPort
+                Protocol: tcp
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref LogGroup
+                awslogs-region: ${self:provider.region}
+                awslogs-stream-prefix: ecs
+
+    Service:
+      Type: AWS::ECS::Service
+      Properties: 
+        ServiceName: ${self:provider.environment.APP_NAME}
+        Cluster: ${self:service}
+        TaskDefinition: ${self:provider.environment.APP_NAME}
+        DeploymentConfiguration:
+          MinimumHealthyPercent: 100
+          MaximumPercent: 200
+        DesiredCount: 1
+        LaunchType: FARGATE
+        NetworkConfiguration: 
+          AwsvpcConfiguration:
+            AssignPublicIp: ENABLED
+            Subnets:
+              - !Ref SubnetA
+              - !Ref SubnetB
+            SecurityGroups:
+              - !Ref ContainerSecurityGroup
+
+    LogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /ecs/${self:provider.environment.APP_NAME}
+
+    ContainerSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: ${self:provider.environment.APP_NAME}-ContainerSecurityGroup
+        VpcId: !Ref VPC
+        SecurityGroupIngress:
+          - IpProtocol: tcp
+            FromPort: !Ref ContainerPort
+            ToPort: !Ref ContainerPort
+            CidrIp: 0.0.0.0/0
